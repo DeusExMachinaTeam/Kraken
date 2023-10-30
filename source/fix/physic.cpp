@@ -1,5 +1,7 @@
 #include "float.h"
 
+#include <smmintrin.h>
+
 #include "routines.hpp"
 #include "fix/physic.hpp"
 
@@ -468,16 +470,18 @@ namespace kraken::fix::physic {
         }
         nj = i;
 
-        for (i=0; i<nj; i++) if (info.ptr[i].nub == info.ptr[i].m) {
-            ofs.ptr[i] = m;
-            m += info.ptr[i].m;
-        }
+        for (i=0; i<nj; i++)
+            if (info.ptr[i].nub == info.ptr[i].m) {
+                ofs.ptr[i] = m;
+                m += info.ptr[i].m;
+            }
         int nub = m;
 
-        for (i=0; i<nj; i++) if (info.ptr[i].nub > 0 && info.ptr[i].nub < info.ptr[i].m) {
-            ofs.ptr[i] = m;
-            m += info.ptr[i].m;
-        }
+        for (i=0; i<nj; i++)
+            if (info.ptr[i].nub > 0 && info.ptr[i].nub < info.ptr[i].m) {
+                ofs.ptr[i] = m;
+                m += info.ptr[i].m;
+            }
 
         for (i=0; i<nj; i++) if (info.ptr[i].nub == 0) {
             ofs.ptr[i] = m;
@@ -841,7 +845,501 @@ namespace kraken::fix::physic {
         }
     };
 
+    void __fastcall dSolveL1 (const float *L, float *B, int n, int lskip1) {
+        /* declare variables - Z matrix, p and q vectors, etc */
+        float Z11,Z21,Z31,Z41,p1,q1,p2,p3,p4,*ex;
+        const float *ell;
+        int lskip2,lskip3,i,j;
+        /* compute lskip values */
+        lskip2 = 2*lskip1;
+        lskip3 = 3*lskip1;
+        /* compute all 4 x 1 blocks of X */
+        for (i=0; i <= n-4; i+=4) {
+            /* compute all 4 x 1 block of X, from rows i..i+4-1 */
+            /* set the Z matrix to 0 */
+            Z11=0;
+            Z21=0;
+            Z31=0;
+            Z41=0;
+            ell = L + i*lskip1;
+            ex = B;
+            /* the inner loop that computes outer products and adds them to Z */
+            for (j=i-12; j >= 0; j -= 12) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                p2=ell[lskip1];
+                p3=ell[lskip2];
+                p4=ell[lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[1];
+                q1=ex[1];
+                p2=ell[1+lskip1];
+                p3=ell[1+lskip2];
+                p4=ell[1+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[2];
+                q1=ex[2];
+                p2=ell[2+lskip1];
+                p3=ell[2+lskip2];
+                p4=ell[2+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[3];
+                q1=ex[3];
+                p2=ell[3+lskip1];
+                p3=ell[3+lskip2];
+                p4=ell[3+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[4];
+                q1=ex[4];
+                p2=ell[4+lskip1];
+                p3=ell[4+lskip2];
+                p4=ell[4+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[5];
+                q1=ex[5];
+                p2=ell[5+lskip1];
+                p3=ell[5+lskip2];
+                p4=ell[5+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[6];
+                q1=ex[6];
+                p2=ell[6+lskip1];
+                p3=ell[6+lskip2];
+                p4=ell[6+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[7];
+                q1=ex[7];
+                p2=ell[7+lskip1];
+                p3=ell[7+lskip2];
+                p4=ell[7+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[8];
+                q1=ex[8];
+                p2=ell[8+lskip1];
+                p3=ell[8+lskip2];
+                p4=ell[8+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[9];
+                q1=ex[9];
+                p2=ell[9+lskip1];
+                p3=ell[9+lskip2];
+                p4=ell[9+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[10];
+                q1=ex[10];
+                p2=ell[10+lskip1];
+                p3=ell[10+lskip2];
+                p4=ell[10+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* load p and q values */
+                p1=ell[11];
+                q1=ex[11];
+                p2=ell[11+lskip1];
+                p3=ell[11+lskip2];
+                p4=ell[11+lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* advance pointers */
+                ell += 12;
+                ex += 12;
+                /* end of inner loop */
+            }
+            /* compute left-over iterations */
+            j += 12;
+            for (; j > 0; j--) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                p2=ell[lskip1];
+                p3=ell[lskip2];
+                p4=ell[lskip3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                Z21 += p2 * q1;
+                Z31 += p3 * q1;
+                Z41 += p4 * q1;
+                /* advance pointers */
+                ell += 1;
+                ex += 1;
+            }
+            /* finish computing the X(i) block */
+            Z11 = ex[0] - Z11;
+            ex[0] = Z11;
+            p1 = ell[lskip1];
+            Z21 = ex[1] - Z21 - p1*Z11;
+            ex[1] = Z21;
+            p1 = ell[lskip2];
+            p2 = ell[1+lskip2];
+            Z31 = ex[2] - Z31 - p1*Z11 - p2*Z21;
+            ex[2] = Z31;
+            p1 = ell[lskip3];
+            p2 = ell[1+lskip3];
+            p3 = ell[2+lskip3];
+            Z41 = ex[3] - Z41 - p1*Z11 - p2*Z21 - p3*Z31;
+            ex[3] = Z41;
+            /* end of outer loop */
+        }
+        /* compute rows at end that are not a multiple of block size */
+        for (; i < n; i++) {
+            /* compute all 1 x 1 block of X, from rows i..i+1-1 */
+            /* set the Z matrix to 0 */
+            Z11=0;
+            ell = L + i*lskip1;
+            ex = B;
+            /* the inner loop that computes outer products and adds them to Z */
+            for (j=i-12; j >= 0; j -= 12) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[1];
+                q1=ex[1];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[2];
+                q1=ex[2];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[3];
+                q1=ex[3];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[4];
+                q1=ex[4];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[5];
+                q1=ex[5];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[6];
+                q1=ex[6];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[7];
+                q1=ex[7];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[8];
+                q1=ex[8];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[9];
+                q1=ex[9];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[10];
+                q1=ex[10];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* load p and q values */
+                p1=ell[11];
+                q1=ex[11];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* advance pointers */
+                ell += 12;
+                ex += 12;
+                /* end of inner loop */
+            }
+            /* compute left-over iterations */
+            j += 12;
+            for (; j > 0; j--) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                /* compute outer product and add it to the Z matrix */
+                Z11 += p1 * q1;
+                /* advance pointers */
+                ell += 1;
+                ex += 1;
+            }
+            /* finish computing the X(i) block */
+            Z11 = ex[0] - Z11;
+            ex[0] = Z11;
+        }
+    }
+
+    void __fastcall dSolveL1T (const float *L, float *B, int n, int lskip1) {
+        /* declare variables - Z matrix, p and q vectors, etc */
+        float Z11,m11,Z21,m21,Z31,m31,Z41,m41,p1,q1,p2,p3,p4,*ex;
+        const float *ell;
+        int lskip2,lskip3,i,j;
+        /* special handling for L and B because we're solving L1 *transpose* */
+        L = L + (n-1)*(lskip1+1);
+        B = B + n-1;
+        lskip1 = -lskip1;
+        /* compute lskip values */
+        lskip2 = 2*lskip1;
+        lskip3 = 3*lskip1;
+        /* compute all 4 x 1 blocks of X */
+        for (i=0; i <= n-4; i+=4) {
+            /* compute all 4 x 1 block of X, from rows i..i+4-1 */
+            /* set the Z matrix to 0 */
+            Z11=0;
+            Z21=0;
+            Z31=0;
+            Z41=0;
+            ell = L - i;
+            ex = B;
+            /* the inner loop that computes outer products and adds them to Z */
+            for (j=i-4; j >= 0; j -= 4) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                p2=ell[-1];
+                p3=ell[-2];
+                p4=ell[-3];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                m21 = p2 * q1;
+                m31 = p3 * q1;
+                m41 = p4 * q1;
+                ell += lskip1;
+                Z11 += m11;
+                Z21 += m21;
+                Z31 += m31;
+                Z41 += m41;
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[-1];
+                p2=ell[-1];
+                p3=ell[-2];
+                p4=ell[-3];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                m21 = p2 * q1;
+                m31 = p3 * q1;
+                m41 = p4 * q1;
+                ell += lskip1;
+                Z11 += m11;
+                Z21 += m21;
+                Z31 += m31;
+                Z41 += m41;
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[-2];
+                p2=ell[-1];
+                p3=ell[-2];
+                p4=ell[-3];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                m21 = p2 * q1;
+                m31 = p3 * q1;
+                m41 = p4 * q1;
+                ell += lskip1;
+                Z11 += m11;
+                Z21 += m21;
+                Z31 += m31;
+                Z41 += m41;
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[-3];
+                p2=ell[-1];
+                p3=ell[-2];
+                p4=ell[-3];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                m21 = p2 * q1;
+                m31 = p3 * q1;
+                m41 = p4 * q1;
+                ell += lskip1;
+                ex -= 4;
+                Z11 += m11;
+                Z21 += m21;
+                Z31 += m31;
+                Z41 += m41;
+                /* end of inner loop */
+            }
+            /* compute left-over iterations */
+            j += 4;
+            for (; j > 0; j--) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                p2=ell[-1];
+                p3=ell[-2];
+                p4=ell[-3];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                m21 = p2 * q1;
+                m31 = p3 * q1;
+                m41 = p4 * q1;
+                ell += lskip1;
+                ex -= 1;
+                Z11 += m11;
+                Z21 += m21;
+                Z31 += m31;
+                Z41 += m41;
+            }
+            /* finish computing the X(i) block */
+            Z11 = ex[0] - Z11;
+            ex[0] = Z11;
+            p1 = ell[-1];
+            Z21 = ex[-1] - Z21 - p1*Z11;
+            ex[-1] = Z21;
+            p1 = ell[-2];
+            p2 = ell[-2+lskip1];
+            Z31 = ex[-2] - Z31 - p1*Z11 - p2*Z21;
+            ex[-2] = Z31;
+            p1 = ell[-3];
+            p2 = ell[-3+lskip1];
+            p3 = ell[-3+lskip2];
+            Z41 = ex[-3] - Z41 - p1*Z11 - p2*Z21 - p3*Z31;
+            ex[-3] = Z41;
+            /* end of outer loop */
+        }
+        /* compute rows at end that are not a multiple of block size */
+        for (; i < n; i++) {
+            /* compute all 1 x 1 block of X, from rows i..i+1-1 */
+            /* set the Z matrix to 0 */
+            Z11=0;
+            ell = L - i;
+            ex = B;
+            /* the inner loop that computes outer products and adds them to Z */
+            for (j=i-4; j >= 0; j -= 4) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                ell += lskip1;
+                Z11 += m11;
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[-1];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                ell += lskip1;
+                Z11 += m11;
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[-2];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                ell += lskip1;
+                Z11 += m11;
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[-3];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                ell += lskip1;
+                ex -= 4;
+                Z11 += m11;
+                /* end of inner loop */
+            }
+            /* compute left-over iterations */
+            j += 4;
+            for (; j > 0; j--) {
+                /* load p and q values */
+                p1=ell[0];
+                q1=ex[0];
+                /* compute outer product and add it to the Z matrix */
+                m11 = p1 * q1;
+                ell += lskip1;
+                ex -= 1;
+                Z11 += m11;
+            }
+            /* finish computing the X(i) block */
+            Z11 = ex[0] - Z11;
+            ex[0] = Z11;
+        }
+    }
+
+    float __fastcall dDot (const float *a, const float *b, int n) {
+        size_t tail = n % 4;
+        size_t base = n - tail;
+
+        float sum = 0;
+        for (size_t i = 0; i < base; i+=4) {
+            __m128 x = _mm_load_ps(a + i);
+            __m128 y = _mm_load_ps(b + i);
+            __m128 s = _mm_dp_ps(x, y, 0x3F);
+            sum += _mm_cvtss_f32(s);
+        };
+
+        for (; base < n; base++) {
+            sum += a[base] * b[base];
+        };
+
+        return sum;
+    }
+
+
     void Apply() {
         routines::Redirect(0x2350, (void*) 0x008FF580, (void*) &dInternalStepIsland_x2);
+        routines::Redirect(0x07B0, (void*) 0x00921A10, (void*) &dSolveL1);
+        routines::Redirect(0x05B0, (void*) 0x00921460, (void*) &dSolveL1T);
+        routines::Redirect(0x00D0, (void*) 0x009169E0, (void*) &dDot);
     };
 };
