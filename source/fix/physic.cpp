@@ -1335,11 +1335,103 @@ namespace kraken::fix::physic {
         return sum;
     }
 
+    int __fastcall dFactorCholesky (float *A, int n) {
+        int i,j,k,nskip;
+        float sum,*a,*b,*aa,*bb,*cc;
+        nskip = dPAD (n);
+
+        HeapArray<float> recip (n);
+        aa = A;
+        for (i=0; i<n; i++) {
+            bb = A;
+            cc = A + i*nskip;
+
+            for (j=0; j<i; j++) {
+                sum = *cc;
+                a = aa;
+                b = bb;
+                for (k=j; k; k--)
+                    sum -= (*(a++))*(*(b++));
+                *cc = sum * recip.ptr[j];
+                bb += nskip;
+                cc++;
+            }
+
+            sum = *cc;
+            a = aa;
+
+            for (k=i; k; k--, a++)
+                sum -= (*a)*(*a);
+
+            if (sum <= 0.0f)
+                return 0;
+
+            *cc = sqrtf(sum);
+            recip.ptr[i] = 1.0f / *cc;
+            aa += nskip;
+        }
+        return 1;
+    };
+
+
+    int __fastcall dIsPositiveDefinite (const float *A, int n) {
+        int nskip = dPAD (n);
+        HeapArray<float> Acopy (nskip * n);
+        memcpy(Acopy.ptr, A, nskip * n * sizeof(float));
+        return dFactorCholesky (Acopy.ptr, n);
+    };
+
+    void __fastcall dSolveCholesky (const float *L, float *b, int n) {
+        int i,k,nskip;
+        float sum;
+        nskip = dPAD (n);
+        HeapArray<float> y (n);
+
+        for (i=0; i<n; i++) {
+            sum = 0;
+            for (k=0; k < i; k++) sum += L[i*nskip+k]*y.ptr[k];
+            y.ptr[i] = (b[i]-sum)/L[i*nskip+i];
+        }
+        for (i=n-1; i >= 0; i--) {
+            sum = 0;
+            for (k=i+1; k < n; k++) sum += L[k*nskip+i]*b[k];
+            b[i] = (y.ptr[i]-sum)/L[i*nskip+i];
+        }
+    }
+
+    int __fastcall dInvertPDMatrix (const float *A, float *Ainv, int n)
+    {
+        int i,j,nskip;
+
+        nskip = dPAD (n);
+
+        HeapArray<float> L (nskip * n);
+        memcpy(L.ptr,A,nskip*n*sizeof(float));
+        HeapArray<float> x (n);
+
+        if (dFactorCholesky(L.ptr, n) == 0) return 0;
+            memset(Ainv, 0, n * nskip * sizeof(float));
+
+            for (i=0; i<n; i++) {
+                for (j=0; j<n; j++) x.ptr[j] = 0;
+                    x.ptr[i] = 1;
+                
+                dSolveCholesky (L.ptr,x.ptr,n);
+
+                for (j=0; j<n; j++)
+                    Ainv[j*nskip+i] = x.ptr[j];
+        }
+        return 1;
+    }
 
     void Apply() {
         routines::Redirect(0x2350, (void*) 0x008FF580, (void*) &dInternalStepIsland_x2);
         routines::Redirect(0x07B0, (void*) 0x00921A10, (void*) &dSolveL1);
         routines::Redirect(0x05B0, (void*) 0x00921460, (void*) &dSolveL1T);
         routines::Redirect(0x00D0, (void*) 0x009169E0, (void*) &dDot);
+        routines::Redirect(0x0060, (void*) 0x0088B380, (void*) &dIsPositiveDefinite);
+        routines::Redirect(0x0150, (void*) 0x0088B030, (void*) &dFactorCholesky);
+        routines::Redirect(0x0330, (void*) 0x0088A400, (void*) &dSolveCholesky);
+        routines::Redirect(0x0200, (void*) 0x0088B180, (void*) &dInvertPDMatrix);
     };
 };
