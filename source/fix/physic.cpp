@@ -120,8 +120,7 @@ namespace kraken::fix::physic {
     DECL dMULTIPLYADD1_333(TA *A, const TB *B, const TC *C) { dMULTIPLYOP1_333(A,+=,B,C) }
     DECL dMULTIPLYADD2_333(TA *A, const TB *B, const TC *C) { dMULTIPLYOP2_333(A,+=,B,C) }
 
-    typedef void (__fastcall* PFNdSolveLCP) (int n, float *A, float *x, float *b, float *w, int nub, float *lo, float *hi, int *findex);
-    PFNdSolveLCP dSolveLCP = (PFNdSolveLCP) 0x00956450;
+    void dSolveLCP (int n, float *A, float *x, float *b, float *w, int nub, float *lo, float *hi, int *findex);
 
     typedef void (__fastcall* PFNdxStepBody) (dxBody *b, float h);
     PFNdxStepBody dxStepBody = (PFNdxStepBody) 0x008FC8F0;
@@ -257,7 +256,13 @@ namespace kraken::fix::physic {
         DWORD* checksum = nullptr;
         size_t size     = 0;
         size_t count    = 0;
-
+        inline HeapArray() {};
+        inline HeapArray(HeapArray& array) {
+            this->ptr      = array.ptr;
+            this->checksum = array.checksum;
+            this->size     = array.size;
+            this->count    = array.count;
+        };
         inline HeapArray(size_t count) {
             this->count = count;
             this->size = sizeof(T) * count + sizeof(DWORD);
@@ -281,6 +286,10 @@ namespace kraken::fix::physic {
             for (size_t i = 0; i < this->count; i++)
                 this->ptr[i] = value;
         };
+        inline void Check() {
+            if (*this->checksum != 0xDEADBEEF)
+                DebugBreak();
+        }
     };
 
     struct dObStackArena {
@@ -1633,6 +1642,993 @@ namespace kraken::fix::physic {
         dObStack_FreeAll(&group->stack);
     };
 
+    struct dLCP {
+        int     n;
+        int     nskip;
+        int     nub;
+        float** A;
+        float*  Adata;
+        float*  x;
+        float*  b;
+        float*  w;
+        float*  lo;
+        float*  hi;
+        float*  L;
+        float*  d;
+        float*  Dell;
+        float*  ell;
+        float*  tmp;
+        int*    state;
+        int*    findex;
+        int*    p;
+        int*    C;
+        int     nC;
+        int     nN;
+
+        dLCP (int _n, int _nub, float* _Adata, float* _x, float* _b, float* _w,
+              float* _lo, float* _hi, float* _L, float* _d,
+              float* _Dell, float* _ell, float* _tmp,
+              int* _state, int* _findex, int* _p, int* _C, float** Arows);
+
+        int getNub() { return nub; }
+        void transfer_i_to_C (int i);
+        void transfer_i_to_N (int i) { nN++; }			// because we can assume C and N span 1:i-1
+        void transfer_i_from_N_to_C (int i);
+        void transfer_i_from_C_to_N (int i);
+        int numC() { return nC; }
+        int numN() { return nN; }
+        int indexC (int i) { return i; }
+        int indexN (int i) { return i+nC; }
+        float Aii (int i) { return this->A[i][i]; }
+        float AiC_times_qC (int i, float *q) { return dDot (this->A[i],q,nC); }
+        float AiN_times_qN (int i, float *q) { return dDot (this->A[i]+nC,q+nC,nN); }
+        void pN_equals_ANC_times_qC (float *p, float *q);
+        void pN_plusequals_ANi (float *p, int i, int sign=1);
+        void pC_plusequals_s_times_qC (float *p, float s, float *q) { for (int i=0; i<nC; i++) p[i] += s*q[i]; }
+        void pN_plusequals_s_times_qN (float *p, float s, float *q) { for (int i=0; i<nN; i++) p[i+nC] += s*q[i+nC]; }
+        void solve1 (float *a, int i, int dir=1, int only_transfer=0);
+        void unpermute();
+    };
+
+    void dSetZero (float *a, int n) {
+        while (n > 0) {
+            *(a++) = 0;
+            n--;
+        }
+    }
+
+    static void swapRowsAndCols (float** A, int n, int i1, int i2, int nskip,
+			     int do_fast_row_swaps) {
+        int i;
+
+        for (i=i1+1; i<i2; i++) A[i1][i] = A[i][i1];
+        for (i=i1+1; i<i2; i++) A[i][i1] = A[i2][i];
+        A[i1][i2] = A[i1][i1];
+        A[i1][i1] = A[i2][i1];
+        A[i2][i1] = A[i2][i2];
+        // swap rows, by swapping row pointers
+        if (do_fast_row_swaps) {
+            float *tmpp;
+            tmpp = A[i1];
+            A[i1] = A[i2];
+            A[i2] = tmpp;
+        }
+        else {
+            HeapArray<float> tmprow (n);
+            memcpy (tmprow.ptr,A[i1],n * sizeof(float));
+            memcpy (A[i1],A[i2],n * sizeof(float));
+            memcpy (A[i2],tmprow.ptr,n * sizeof(float));
+        }
+        // swap columns the hard way
+        for (i=i2+1; i<n; i++) {
+            float tmp = A[i][i1];
+            A[i][i1] = A[i][i2];
+            A[i][i2] = tmp;
+        }
+    }
+
+    void swapProblem (float** A, float *x, float *b, float *w, float *lo,
+			 float *hi, int *p, int *state, int *findex,
+			 int n, int i1, int i2, int nskip,
+			 int do_fast_row_swaps)
+        {
+        float tmp;
+        int tmpi;
+        if (i1==i2)
+            return;
+
+        swapRowsAndCols (A,n,i1,i2,nskip,do_fast_row_swaps);
+        tmp = x[i1];
+        x[i1] = x[i2];
+        x[i2] = tmp;
+        tmp = b[i1];
+        b[i1] = b[i2];
+        b[i2] = tmp;
+        tmp = w[i1];
+        w[i1] = w[i2];
+        w[i2] = tmp;
+        tmp = lo[i1];
+        lo[i1] = lo[i2];
+        lo[i2] = tmp;
+        tmp = hi[i1];
+        hi[i1] = hi[i2];
+        hi[i2] = tmp;
+        tmpi = p[i1];
+        p[i1] = p[i2];
+        p[i2] = tmpi;
+        tmpi = state[i1];
+        state[i1] = state[i2];
+        state[i2] = tmpi;
+        if (findex) {
+            tmpi = findex[i1];
+            findex[i1] = findex[i2];
+            findex[i2] = tmpi;
+        }
+    }
+
+    void dLCP::solve1 (float *a, int i, int dir, int only_transfer)
+    {
+        // the `Dell' and `ell' that are computed here are saved. if index i is
+        // later added to the factorization then they can be reused.
+        //
+        // @@@ question: do we need to solve for entire delta_x??? yes, but
+        //     only if an x goes below 0 during the step.
+
+        int j;
+        if (nC > 0) {
+            float *aptr = A[i];
+        #   ifdef NUB_OPTIMIZATIONS
+            // if nub>0, initial part of aptr[] is guaranteed unpermuted
+            for (j=0; j<nub; j++) Dell[j] = aptr[j];
+            for (j=nub; j<nC; j++) Dell[j] = aptr[C[j]];
+        #   else
+            for (j=0; j<nC; j++) Dell[j] = aptr[C[j]];
+        #   endif
+            dSolveL1 (L,Dell,nC,nskip);
+            //L.Check();
+
+            for (j=0; j<nC; j++) ell[j] = Dell[j] * d[j];
+
+            if (!only_transfer) {
+            for (j=0; j<nC; j++) tmp[j] = ell[j];
+            dSolveL1T (L,tmp,nC,nskip);
+            //L.Check();
+
+            if (dir > 0) {
+            for (j=0; j<nC; j++) a[C[j]] = -tmp[j];
+            }
+            else {
+            for (j=0; j<nC; j++) a[C[j]] = tmp[j];
+            }
+            }
+        }
+    }
+
+
+    void dLCP::unpermute()
+    {
+        // now we have to un-permute x and w
+        int j;
+        HeapArray<float> tmp (n);
+        memcpy (tmp.ptr,x,n*sizeof(float));
+        for (j=0; j<n; j++) x[p[j]] = tmp.ptr[j];
+        memcpy (tmp.ptr,w,n*sizeof(float));
+        for (j=0; j<n; j++) w[p[j]] = tmp.ptr[j];
+    }
+
+    void dLCP::pN_equals_ANC_times_qC (float *p, float *q) {
+    // we could try to make this matrix-vector multiplication faster using
+    // outer product matrix tricks, e.g. with the dMultidotX() functions.
+    // but i tried it and it actually made things slower on random 100x100
+    // problems because of the overhead involved. so we'll stick with the
+    // simple method for now.
+    for (int i=0; i<nN; i++) p[i+nC] = dDot (A[i+nC],q,nC);
+    }
+
+
+    void dLCP::pN_plusequals_ANi (float *p, int i, int sign) {
+        float *aptr = A[i]+nC;
+        if (sign > 0) {
+            for (int i=0; i<nN; i++) p[i+nC] += aptr[i];
+        }
+        else {
+            for (int i=0; i<nN; i++) p[i+nC] -= aptr[i];
+        }
+    }
+
+    void dLCP::transfer_i_from_C_to_N (int i) {
+        // remove a row/column from the factorization, and adjust the
+        // indexes (black magic!)
+        int j,k;
+        for (j=0; j<nC; j++) if (C[j]==i) {
+            dLDLTRemove (A,C,L,d,n,nC,j,nskip);
+            //L.Check();
+            for (k=0; k<nC; k++) if (C[k]==nC-1) {
+                C[k] = C[j];
+                if (j < (nC-1)) memmove (C+j,C+j+1,(nC-j-1)*sizeof(int));
+                break;
+            }
+            break;
+        }
+        swapProblem (A,x,b,w,lo,hi,p,state,findex,n,i,nC-1,nskip,1);
+        nC--;
+        nN++;
+    }
+
+    void dLCP::transfer_i_from_N_to_C (int i) {
+        int j;
+        if (nC > 0) {
+            float *aptr = A[i];
+            // if nub>0, initial part of aptr unpermuted
+            for (j=0; j<nub; j++) Dell[j] = aptr[j];
+            for (j=nub; j<nC; j++) Dell[j] = aptr[C[j]];
+            dSolveL1 (L,Dell,nC,nskip);
+            //L.Check();
+            for (j=0; j<nC; j++) ell[j] = Dell[j] * d[j];
+            for (j=0; j<nC; j++) L[nC*nskip+j] = ell[j];
+            //L.Check();
+            d[nC] = 1.0f / (A[i][i] - dDot(ell,Dell,nC));
+        }
+        else {
+            d[0] = 1.0f / (A[i][i]);
+        }
+        swapProblem (A,x,b,w,lo,hi,p,state,findex,n,nC,i,nskip,1);
+        C[nC] = nC;
+        nN--;
+        nC++;
+
+        // @@@ TO DO LATER
+        // if we just finish here then we'll go back and re-solve for
+        // delta_x. but actually we can be more efficient and incrementally
+        // update delta_x here. but if we do this, we wont have ell and Dell
+        // to use in updating the factorization later.
+    }
+
+    void dLCP::transfer_i_to_C (int i) {
+        int j;
+        if (nC > 0) {
+            // ell,Dell were computed by solve1(). note, ell = D \ L1solve (L,A(i,C))
+            for (j=0; j<nC; j++) L[nC*nskip+j] = ell[j];
+            //L.Check();
+            d[nC] = 1.0f / (A[i][i] - dDot(ell,Dell,nC));
+        }
+        else {
+            d[0] = 1.0f / (A[i][i]);
+        }
+        swapProblem (A,x,b,w,lo,hi,p,state,findex,n,nC,i,nskip,1);
+        C[nC] = nC;
+        nC++;
+    }
+    
+    void dSolveL1_1 (const float *L, float *B, int n, int lskip1) {
+        /* declare variables - Z matrix, p and q vectors, etc */
+        float Z11,m11,Z21,m21,p1,q1,p2,*ex;
+        const float *ell;
+        int i,j;
+        /* compute all 2 x 1 blocks of X */
+        for (i=0; i < n; i+=2) {
+            /* compute all 2 x 1 block of X, from rows i..i+2-1 */
+            /* set the Z matrix to 0 */
+            Z11=0;
+            Z21=0;
+            ell = L + i*lskip1;
+            ex = B;
+            /* the inner loop that computes outer products and adds them to Z */
+            for (j=i-2; j >= 0; j -= 2) {
+            /* compute outer product and add it to the Z matrix */
+            p1=ell[0];
+            q1=ex[0];
+            m11 = p1 * q1;
+            p2=ell[lskip1];
+            m21 = p2 * q1;
+            Z11 += m11;
+            Z21 += m21;
+            /* compute outer product and add it to the Z matrix */
+            p1=ell[1];
+            q1=ex[1];
+            m11 = p1 * q1;
+            p2=ell[1+lskip1];
+            m21 = p2 * q1;
+            /* advance pointers */
+            ell += 2;
+            ex += 2;
+            Z11 += m11;
+            Z21 += m21;
+            /* end of inner loop */
+            }
+            /* compute left-over iterations */
+            j += 2;
+            for (; j > 0; j--) {
+            /* compute outer product and add it to the Z matrix */
+            p1=ell[0];
+            q1=ex[0];
+            m11 = p1 * q1;
+            p2=ell[lskip1];
+            m21 = p2 * q1;
+            /* advance pointers */
+            ell += 1;
+            ex += 1;
+            Z11 += m11;
+            Z21 += m21;
+            }
+            /* finish computing the X(i) block */
+            Z11 = ex[0] - Z11;
+            ex[0] = Z11;
+            p1 = ell[lskip1];
+            Z21 = ex[1] - Z21 - p1*Z11;
+            ex[1] = Z21;
+            /* end of outer loop */
+        }
+    }
+
+    void dSolveL1_2 (const float *L, float *B, int n, int lskip1) {  
+        /* declare variables - Z matrix, p and q vectors, etc */
+        float Z11,m11,Z12,m12,Z21,m21,Z22,m22,p1,q1,p2,q2,*ex;
+        const float *ell;
+        int i,j;
+        /* compute all 2 x 2 blocks of X */
+        for (i=0; i < n; i+=2) {
+            /* compute all 2 x 2 block of X, from rows i..i+2-1 */
+            /* set the Z matrix to 0 */
+            Z11=0;
+            Z12=0;
+            Z21=0;
+            Z22=0;
+            ell = L + i*lskip1;
+            ex = B;
+            /* the inner loop that computes outer products and adds them to Z */
+            for (j=i-2; j >= 0; j -= 2) {
+            /* compute outer product and add it to the Z matrix */
+            p1=ell[0];
+            q1=ex[0];
+            m11 = p1 * q1;
+            q2=ex[lskip1];
+            m12 = p1 * q2;
+            p2=ell[lskip1];
+            m21 = p2 * q1;
+            m22 = p2 * q2;
+            Z11 += m11;
+            Z12 += m12;
+            Z21 += m21;
+            Z22 += m22;
+            /* compute outer product and add it to the Z matrix */
+            p1=ell[1];
+            q1=ex[1];
+            m11 = p1 * q1;
+            q2=ex[1+lskip1];
+            m12 = p1 * q2;
+            p2=ell[1+lskip1];
+            m21 = p2 * q1;
+            m22 = p2 * q2;
+            /* advance pointers */
+            ell += 2;
+            ex += 2;
+            Z11 += m11;
+            Z12 += m12;
+            Z21 += m21;
+            Z22 += m22;
+            /* end of inner loop */
+            }
+            /* compute left-over iterations */
+            j += 2;
+            for (; j > 0; j--) {
+            /* compute outer product and add it to the Z matrix */
+            p1=ell[0];
+            q1=ex[0];
+            m11 = p1 * q1;
+            q2=ex[lskip1];
+            m12 = p1 * q2;
+            p2=ell[lskip1];
+            m21 = p2 * q1;
+            m22 = p2 * q2;
+            /* advance pointers */
+            ell += 1;
+            ex += 1;
+            Z11 += m11;
+            Z12 += m12;
+            Z21 += m21;
+            Z22 += m22;
+            }
+            /* finish computing the X(i) block */
+            Z11 = ex[0] - Z11;
+            ex[0] = Z11;
+            Z12 = ex[lskip1] - Z12;
+            ex[lskip1] = Z12;
+            p1 = ell[lskip1];
+            Z21 = ex[1] - Z21 - p1*Z11;
+            ex[1] = Z21;
+            Z22 = ex[1+lskip1] - Z22 - p1*Z12;
+            ex[1+lskip1] = Z22;
+            /* end of outer loop */
+        }
+    }
+
+    void dFactorLDLT (float *A, float *d, int n, int nskip1) {
+        int i,j;
+        float sum,*ell,*dee,dd,p1,p2,q1,q2,Z11,m11,Z21,m21,Z22,m22;
+        if (n < 1) return;
+        
+        for (i=0; i<=n-2; i += 2) {
+            /* solve L*(D*l)=a, l is scaled elements in 2 x i block at A(i,0) */
+            dSolveL1_2 (A,A+i*nskip1,i,nskip1);
+            /* scale the elements in a 2 x i block at A(i,0), and also */
+            /* compute Z = the outer product matrix that we'll need. */
+            Z11 = 0;
+            Z21 = 0;
+            Z22 = 0;
+            ell = A+i*nskip1;
+            dee = d;
+            for (j=i-6; j >= 0; j -= 6) {
+            p1 = ell[0];
+            p2 = ell[nskip1];
+            dd = dee[0];
+            q1 = p1*dd;
+            q2 = p2*dd;
+            ell[0] = q1;
+            ell[nskip1] = q2;
+            m11 = p1*q1;
+            m21 = p2*q1;
+            m22 = p2*q2;
+            Z11 += m11;
+            Z21 += m21;
+            Z22 += m22;
+            p1 = ell[1];
+            p2 = ell[1+nskip1];
+            dd = dee[1];
+            q1 = p1*dd;
+            q2 = p2*dd;
+            ell[1] = q1;
+            ell[1+nskip1] = q2;
+            m11 = p1*q1;
+            m21 = p2*q1;
+            m22 = p2*q2;
+            Z11 += m11;
+            Z21 += m21;
+            Z22 += m22;
+            p1 = ell[2];
+            p2 = ell[2+nskip1];
+            dd = dee[2];
+            q1 = p1*dd;
+            q2 = p2*dd;
+            ell[2] = q1;
+            ell[2+nskip1] = q2;
+            m11 = p1*q1;
+            m21 = p2*q1;
+            m22 = p2*q2;
+            Z11 += m11;
+            Z21 += m21;
+            Z22 += m22;
+            p1 = ell[3];
+            p2 = ell[3+nskip1];
+            dd = dee[3];
+            q1 = p1*dd;
+            q2 = p2*dd;
+            ell[3] = q1;
+            ell[3+nskip1] = q2;
+            m11 = p1*q1;
+            m21 = p2*q1;
+            m22 = p2*q2;
+            Z11 += m11;
+            Z21 += m21;
+            Z22 += m22;
+            p1 = ell[4];
+            p2 = ell[4+nskip1];
+            dd = dee[4];
+            q1 = p1*dd;
+            q2 = p2*dd;
+            ell[4] = q1;
+            ell[4+nskip1] = q2;
+            m11 = p1*q1;
+            m21 = p2*q1;
+            m22 = p2*q2;
+            Z11 += m11;
+            Z21 += m21;
+            Z22 += m22;
+            p1 = ell[5];
+            p2 = ell[5+nskip1];
+            dd = dee[5];
+            q1 = p1*dd;
+            q2 = p2*dd;
+            ell[5] = q1;
+            ell[5+nskip1] = q2;
+            m11 = p1*q1;
+            m21 = p2*q1;
+            m22 = p2*q2;
+            Z11 += m11;
+            Z21 += m21;
+            Z22 += m22;
+            ell += 6;
+            dee += 6;
+            }
+            /* compute left-over iterations */
+            j += 6;
+            for (; j > 0; j--) {
+            p1 = ell[0];
+            p2 = ell[nskip1];
+            dd = dee[0];
+            q1 = p1*dd;
+            q2 = p2*dd;
+            ell[0] = q1;
+            ell[nskip1] = q2;
+            m11 = p1*q1;
+            m21 = p2*q1;
+            m22 = p2*q2;
+            Z11 += m11;
+            Z21 += m21;
+            Z22 += m22;
+            ell++;
+            dee++;
+            }
+            /* solve for diagonal 2 x 2 block at A(i,i) */
+            Z11 = ell[0] - Z11;
+            Z21 = ell[nskip1] - Z21;
+            Z22 = ell[1+nskip1] - Z22;
+            dee = d + i;
+            /* factorize 2 x 2 block Z,dee */
+            /* factorize row 1 */
+            dee[0] = 1.0f / Z11;
+            /* factorize row 2 */
+            sum = 0;
+            q1 = Z21;
+            q2 = q1 * dee[0];
+            Z21 = q2;
+            sum += q1*q2;
+            dee[1] = 1.0f / (Z22 - sum);
+            /* done factorizing 2 x 2 block */
+            ell[nskip1] = Z21;
+        }
+        /* compute the (less than 2) rows at the bottom */
+        switch (n-i) {
+            case 0:
+            break;
+            
+            case 1:
+            dSolveL1_1 (A,A+i*nskip1,i,nskip1);
+            /* scale the elements in a 1 x i block at A(i,0), and also */
+            /* compute Z = the outer product matrix that we'll need. */
+            Z11 = 0;
+            ell = A+i*nskip1;
+            dee = d;
+            for (j=i-6; j >= 0; j -= 6) {
+            p1 = ell[0];
+            dd = dee[0];
+            q1 = p1*dd;
+            ell[0] = q1;
+            m11 = p1*q1;
+            Z11 += m11;
+            p1 = ell[1];
+            dd = dee[1];
+            q1 = p1*dd;
+            ell[1] = q1;
+            m11 = p1*q1;
+            Z11 += m11;
+            p1 = ell[2];
+            dd = dee[2];
+            q1 = p1*dd;
+            ell[2] = q1;
+            m11 = p1*q1;
+            Z11 += m11;
+            p1 = ell[3];
+            dd = dee[3];
+            q1 = p1*dd;
+            ell[3] = q1;
+            m11 = p1*q1;
+            Z11 += m11;
+            p1 = ell[4];
+            dd = dee[4];
+            q1 = p1*dd;
+            ell[4] = q1;
+            m11 = p1*q1;
+            Z11 += m11;
+            p1 = ell[5];
+            dd = dee[5];
+            q1 = p1*dd;
+            ell[5] = q1;
+            m11 = p1*q1;
+            Z11 += m11;
+            ell += 6;
+            dee += 6;
+            }
+            /* compute left-over iterations */
+            j += 6;
+            for (; j > 0; j--) {
+            p1 = ell[0];
+            dd = dee[0];
+            q1 = p1*dd;
+            ell[0] = q1;
+            m11 = p1*q1;
+            Z11 += m11;
+            ell++;
+            dee++;
+            }
+            /* solve for diagonal 1 x 1 block at A(i,i) */
+            Z11 = ell[0] - Z11;
+            dee = d + i;
+            /* factorize 1 x 1 block Z,dee */
+            /* factorize row 1 */
+            dee[0] = 1.0f / Z11;
+            /* done factorizing 1 x 1 block */
+            break;
+            
+            default: *((char*)0)=0;  /* this should never happen! */
+        }
+    }
+
+    void dVectorScale (float *a, const float *d, int n) {
+        for (int i=0; i<n; i++) a[i] *= d[i];
+    }
+
+
+    void dSolveLDLT (const float *L, const float *d, float *b, int n, int nskip) {
+        dSolveL1 (L,b,n,nskip);
+        dVectorScale (b,d,n);
+        dSolveL1T (L,b,n,nskip);
+    }
+
+    dLCP::dLCP (int _n, int _nub, float *_Adata, float *_x, float *_b, float *_w,
+                float *_lo, float *_hi, float* _L, float *_d,
+                float *_Dell, float *_ell, float *_tmp,
+                int *_state, int *_findex, int *_p, int *_C, float **Arows){
+        n = _n;
+        nub = _nub;
+        Adata = _Adata;
+        A = 0;
+        x = _x;
+        b = _b;
+        w = _w;
+        lo = _lo;
+        hi = _hi;
+        L = _L;
+        d = _d;
+        Dell = _Dell;
+        ell = _ell;
+        tmp = _tmp;
+        state = _state;
+        findex = _findex;
+        p = _p;
+        C = _C;
+        nskip = dPAD(n);
+        dSetZero (x,n);
+
+        int k;
+
+        A = Arows;
+        for (k=0; k<n; k++) A[k] = Adata + k*nskip;
+
+        nC = 0;
+        nN = 0;
+        for (k=0; k<n; k++) p[k]=k;		// initially unpermuted
+
+        /*
+        // for testing, we can do some random swaps in the area i > nub
+        if (nub < n) {
+            for (k=0; k<100; k++) {
+            int i1,i2;
+            do {
+            i1 = dRandInt(n-nub)+nub;
+            i2 = dRandInt(n-nub)+nub;
+            }
+            while (i1 > i2); 
+            //printf ("--> %d %d\n",i1,i2);
+            swapProblem (A,x,b,w,lo,hi,p,state,findex,n,i1,i2,nskip,0);
+            }
+        }
+        */
+
+        // permute the problem so that *all* the unbounded variables are at the
+        // start, i.e. look for unbounded variables not included in `nub'. we can
+        // potentially push up `nub' this way and get a bigger initial factorization.
+        // note that when we swap rows/cols here we must not just swap row pointers,
+        // as the initial factorization relies on the data being all in one chunk.
+        // variables that have findex >= 0 are *not* considered to be unbounded even
+        // if lo=-inf and hi=inf - this is because these limits may change during the
+        // solution process.
+
+        for (k=nub; k<n; k++) {
+            if (findex && findex[k] >= 0) continue;
+            if (lo[k]==-FLT_MAX && hi[k]==FLT_MAX) {
+            swapProblem (A,x,b,w,lo,hi,p,state,findex,n,nub,k,nskip,0);
+            nub++;
+            }
+        }
+
+        // if there are unbounded variables at the start, factorize A up to that
+        // point and solve for x. this puts all indexes 0..nub-1 into C.
+        if (nub > 0) {
+            for (k=0; k<nub; k++) memcpy (L+k*nskip,A[k],(k+1)*sizeof(float));
+            //L.Check();
+            dFactorLDLT (L,d,nub,nskip);
+            //L.Check();
+
+            memcpy (x,b,nub*sizeof(float));
+            dSolveLDLT ((const float*) L,d,x,nub,nskip);
+            //L.Check();
+            dSetZero (w,nub);
+            for (k=0; k<nub; k++) C[k] = k;
+            nC = nub;
+        }
+
+        // permute the indexes > nub such that all findex variables are at the end
+        if (findex) {
+            int num_at_end = 0;
+            for (k=n-1; k >= nub; k--) {
+            if (findex[k] >= 0) {
+            swapProblem (A,x,b,w,lo,hi,p,state,findex,n,k,n-1-num_at_end,nskip,1);
+            num_at_end++;
+            }
+            }
+        }
+
+        // print info about indexes
+        /*
+        for (k=0; k<n; k++) {
+            if (k<nub) printf ("C");
+            else if (lo[k]==-dInfinity && hi[k]==dInfinity) printf ("c");
+            else printf (".");
+        }
+        printf ("\n");
+        */
+    }
+
+    void dSolveLCP (int n, float *A, float *x, float *b, float *w, int nub, float *lo, float *hi, int *findex) {
+        int i,k,hit_first_friction_index = 0;
+        int nskip = dPAD(n);
+
+        // if all the variables are unbounded then we can just factor, solve,
+        // and return
+        if (nub >= n) {
+            dFactorLDLT (A,w,n,nskip);		// use w for d
+            dSolveLDLT (A,w,b,n,nskip);
+            memcpy (x,b,n*sizeof(float));
+            dSetZero (w,n);
+            return;
+        }
+
+        HeapArray<float>  L       (n * nskip);
+        HeapArray<float>  d       (n);
+        HeapArray<float>  delta_x (n);
+        HeapArray<float>  delta_w (n);
+        HeapArray<float>  Dell    (n);
+        HeapArray<float>  ell     (n);
+        HeapArray<float*> Arows   (n);
+        HeapArray<int>    p       (n);
+        HeapArray<int>    C       (n);
+
+        int dir;
+        float dirf;
+
+        // for i in N, state[i] is 0 if x(i)==lo(i) or 1 if x(i)==hi(i)
+        HeapArray<int> state (n);
+
+        // create LCP object. note that tmp is set to delta_w to save space, this
+        // optimization relies on knowledge of how tmp is used, so be careful!
+        dLCP lcp (n, nub, A, x, b, w, lo, hi, L.ptr, d.ptr, Dell.ptr, ell.ptr, delta_w.ptr, state.ptr, findex, p.ptr, C.ptr, Arows.ptr);
+        nub = lcp.getNub();
+
+        // loop over all indexes nub..n-1. for index i, if x(i),w(i) satisfy the
+        // LCP conditions then i is added to the appropriate index set. otherwise
+        // x(i),w(i) is driven either +ve or -ve to force it to the valid region.
+        // as we drive x(i), x(C) is also adjusted to keep w(C) at zero.
+        // while driving x(i) we maintain the LCP conditions on the other variables
+        // 0..i-1. we do this by watching out for other x(i),w(i) values going
+        // outside the valid region, and then switching them between index sets
+        // when that happens.
+
+        for (i=nub; i<n; i++) {
+            // the index i is the driving index and indexes i+1..n-1 are "dont care",
+            // i.e. when we make changes to the system those x's will be zero and we
+            // don't care what happens to those w's. in other words, we only consider
+            // an (i+1)*(i+1) sub-problem of A*x=b+w.
+
+            // if we've hit the first friction index, we have to compute the lo and
+            // hi values based on the values of x already computed. we have been
+            // permuting the indexes, so the values stored in the findex vector are
+            // no longer valid. thus we have to temporarily unpermute the x vector. 
+            // for the purposes of this computation, 0*infinity = 0 ... so if the
+            // contact constraint's normal force is 0, there should be no tangential
+            // force applied.
+
+            if (hit_first_friction_index == 0 && findex && findex[i] >= 0) {
+                // un-permute x into delta_w, which is not being used at the moment
+                for (k=0; k<n; k++) delta_w.ptr[p.ptr[k]] = x[k];
+
+                // set lo and hi values
+                for (k=i; k<n; k++) {
+                    float wfk = delta_w.ptr[findex[k]];
+                    if (wfk == 0) {
+                        hi[k] = 0;
+                        lo[k] = 0;
+                    }
+                    else {
+                        hi[k] = fabsf(hi[k] * wfk);
+                        lo[k] = -hi[k];
+                    }
+                }
+                hit_first_friction_index = 1;
+            }
+
+            // thus far we have not even been computing the w values for indexes
+            // greater than i, so compute w[i] now.
+            w[i] = lcp.AiC_times_qC (i,x) + lcp.AiN_times_qN (i,x) - b[i];
+
+            // if lo=hi=0 (which can happen for tangential friction when normals are
+            // 0) then the index will be assigned to set N with some state. however,
+            // set C's line has zero size, so the index will always remain in set N.
+            // with the "normal" switching logic, if w changed sign then the index
+            // would have to switch to set C and then back to set N with an inverted
+            // state. this is pointless, and also computationally expensive. to
+            // prevent this from happening, we use the rule that indexes with lo=hi=0
+            // will never be checked for set changes. this means that the state for
+            // these indexes may be incorrect, but that doesn't matter.
+
+            // see if x(i),w(i) is in a valid region
+            if (lo[i]==0 && w[i] >= 0) {
+                lcp.transfer_i_to_N (i);
+                state.ptr[i] = 0;
+            }
+            else if (hi[i]==0 && w[i] <= 0) {
+                lcp.transfer_i_to_N (i);
+                state.ptr[i] = 1;
+            }
+            else if (w[i]==0) {
+                // this is a degenerate case. by the time we get to this test we know
+                // that lo != 0, which means that lo < 0 as lo is not allowed to be +ve,
+                // and similarly that hi > 0. this means that the line segment
+                // corresponding to set C is at least finite in extent, and we are on it.
+                // NOTE: we must call lcp.solve1() before lcp.transfer_i_to_C()
+                lcp.solve1 (delta_x.ptr,i,0,1);
+                lcp.transfer_i_to_C (i);
+            }
+            else {
+                // we must push x(i) and w(i)
+                for (;;) {
+                // find direction to push on x(i)
+                    if (w[i] <= 0) {
+                        dir = 1;
+                        dirf = 1.0f;
+                    }
+                    else {
+                        dir = -1;
+                        dirf = -1.0f;
+                    }
+
+                    // compute: delta_x(C) = -dir*A(C,C)\A(C,i)
+                    lcp.solve1 (delta_x.ptr,i,dir);
+                    // note that delta_x[i] = dirf, but we wont bother to set it
+
+                    // compute: delta_w = A*delta_x ... note we only care about
+                        // delta_w(N) and delta_w(i), the rest is ignored
+                    lcp.pN_equals_ANC_times_qC (delta_w.ptr,delta_x.ptr);
+                    lcp.pN_plusequals_ANi (delta_w.ptr,i,dir);
+                        delta_w.ptr[i] = lcp.AiC_times_qC (i,delta_x.ptr) + lcp.Aii(i)*dirf;
+
+                    // find largest step we can take (size=s), either to drive x(i),w(i)
+                    // to the valid LCP region or to drive an already-valid variable
+                    // outside the valid region.
+
+                    int cmd = 1;		// index switching command
+                    int si = 0;		// si = index to switch if cmd>3
+                    float s = -w[i] / delta_w.ptr[i];
+                    if (dir > 0) {
+                        if (hi[i] < FLT_MAX) {
+                            float s2 = (hi[i] - x[i]) / dirf;		// step to x(i)=hi(i)
+                            if (s2 < s) {
+                                s = s2;
+                                cmd = 3;
+                            }
+                        }
+                    }
+                    else {
+                        if (lo[i] > -FLT_MAX) {
+                            float s2 = (lo[i] - x[i]) / dirf;		// step to x(i)=lo(i)
+                            if (s2 < s) {
+                                s = s2;
+                                cmd = 2;
+                            }
+                        }
+                    }
+
+                    for (k=0; k < lcp.numN(); k++) {
+                        if ((state.ptr[lcp.indexN(k)]==0 && delta_w.ptr[lcp.indexN(k)] < 0) ||
+                            (state.ptr[lcp.indexN(k)]!=0 && delta_w.ptr[lcp.indexN(k)] > 0)) {
+                            // don't bother checking if lo=hi=0
+                            if (lo[lcp.indexN(k)] == 0 && hi[lcp.indexN(k)] == 0)
+                                continue;
+
+                            float s2 = -w[lcp.indexN(k)] / delta_w.ptr[lcp.indexN(k)];
+                            if (s2 < s) {
+                                s = s2;
+                                cmd = 4;
+                                si = lcp.indexN(k);
+                            }
+                        }
+                    }
+
+                for (k=nub; k < lcp.numC(); k++) {
+                    if (delta_x.ptr[lcp.indexC(k)] < 0 && lo[lcp.indexC(k)] > -FLT_MAX) {
+                        float s2 = (lo[lcp.indexC(k)]-x[lcp.indexC(k)]) /
+                        delta_x.ptr[lcp.indexC(k)];
+                        if (s2 < s) {
+                        s = s2;
+                        cmd = 5;
+                        si = lcp.indexC(k);
+                        }
+                    }
+                    if (delta_x.ptr[lcp.indexC(k)] > 0 && hi[lcp.indexC(k)] < FLT_MAX) {
+                        float s2 = (hi[lcp.indexC(k)]-x[lcp.indexC(k)]) / delta_x.ptr[lcp.indexC(k)];
+                        if (s2 < s) {
+                            s = s2;
+                            cmd = 6;
+                            si = lcp.indexC(k);
+                        }
+                    }
+                }
+
+                //static char* cmdstring[8] = {0,"->C","->NL","->NH","N->C",
+                //			     "C->NL","C->NH"};
+                //printf ("cmd=%d (%s), si=%d\n",cmd,cmdstring[cmd],(cmd>3) ? si : i);
+
+                // if s <= 0 then we've got a problem. if we just keep going then
+                // we're going to get stuck in an infinite loop. instead, just cross
+                // our fingers and exit with the current solution.
+                if (s <= 0) {
+                    if (i < (n-1)) {
+                        dSetZero(x+i,n-i);
+                        dSetZero(w+i,n-i);
+                    }
+                    goto done;
+                }
+
+                // apply x = x + s * delta_x
+                lcp.pC_plusequals_s_times_qC (x,s,delta_x.ptr);
+                x[i] += s * dirf;
+
+                // apply w = w + s * delta_w
+                lcp.pN_plusequals_s_times_qN (w,s,delta_w.ptr);
+                w[i] += s * delta_w.ptr[i];
+
+                // switch indexes between sets if necessary
+                switch (cmd) {
+                case 1:		// done
+                    w[i] = 0;
+                    lcp.transfer_i_to_C (i);
+                    break;
+                case 2:		// done
+                    x[i] = lo[i];
+                    state.ptr[i] = 0;
+                    lcp.transfer_i_to_N (i);
+                    break;
+                case 3:		// done
+                    x[i] = hi[i];
+                    state.ptr[i] = 1;
+                    lcp.transfer_i_to_N (i);
+                    break;
+                case 4:		// keep going
+                    w[si] = 0;
+                    lcp.transfer_i_from_N_to_C (si);
+                    break;
+                case 5:		// keep going
+                    x[si] = lo[si];
+                    state.ptr[si] = 0;
+                    lcp.transfer_i_from_C_to_N (si);
+                    break;
+                case 6:		// keep going
+                    x[si] = hi[si];
+                    state.ptr[si] = 1;
+                    lcp.transfer_i_from_C_to_N (si);
+                    break;
+                }
+
+                if (cmd <= 3) break;
+                }
+            }
+        }
+
+        done:
+        lcp.unpermute();
+        }
+
+
     void Apply() {
         routines::Redirect(0x2350, (void*) 0x008FF580, (void*) &dInternalStepIsland_x2);
         routines::Redirect(0x07B0, (void*) 0x00921A10, (void*) &dSolveL1);
@@ -1645,5 +2641,6 @@ namespace kraken::fix::physic {
         routines::Redirect(0x06E0, (void*) 0x0088A820, (void*) &dLDLTAddTL);
         routines::Redirect(0x03F0, (void*) 0x0088B3E0, (void*) &dLDLTRemove);
         routines::Redirect(0x00C0, (void*) 0x007C4FD0, (void*) &dJointGroupEmpty);
+        routines::Redirect(0x0860, (void*) 0x00956450, (void*) &dSolveLCP);
     };
 };
