@@ -1,0 +1,29 @@
+1 VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK 0x3FL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 4L
+ FILETYPE 2L
+ FILESUBTYPE 0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",        "\0"
+            VALUE "LegalCopyright",     "DeusExMachina Team (c) 2023\0"
+            VALUE "OriginalFilename",   "kraken.dll\0"
+            VALUE "ProductName",        "Kraken\0"
+            VALUE "ProductVersion",     "0.1.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409,1200
+    END
+END
