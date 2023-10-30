@@ -24,6 +24,10 @@ namespace kraken::fix::physic {
     struct dxJointVtable;
     struct dxJointBreakInfo;
     struct dxJoint;
+    struct dxJointGroup;
+    struct dObStack;
+    struct dObStackArena;
+    typedef dxJointGroup* dJointGroupID;
 
     #define dDOTpq(a,b,p,q) ((a)[0]*(b)[0] + (a)[p]*(b)[q] + (a)[2*(p)]*(b)[2*(q)])
 
@@ -277,6 +281,27 @@ namespace kraken::fix::physic {
             for (size_t i = 0; i < this->count; i++)
                 this->ptr[i] = value;
         };
+    };
+
+    struct dObStackArena {
+        dObStackArena* next;
+        int            used;
+    };
+
+    struct dObStack {
+        dObStackArena* first;
+        dObStackArena* last;
+        dObStackArena* current_arena;
+        int              current_ofs;
+    };
+
+    struct dxJointGroup {
+        int num;
+        dObStack stack;
+    };
+
+    struct dxJointGroupID {
+
     };
 
     struct dxQuickStepParameters {
@@ -1424,14 +1449,201 @@ namespace kraken::fix::physic {
         return 1;
     }
 
+    #define M_SQRT1_2 0.7071067811865475244008443621048490f
+
+    void __fastcall dLDLTAddTL (float *L, float *d, const float *a, int n, int nskip) {
+        int j,p;
+        float W11,W21,alpha1,alpha2,alphanew,gamma1,gamma2,k1,k2,Wp,ell,dee;
+
+        if (n < 2) return;
+
+        HeapArray<float> W1 (n);
+        HeapArray<float> W2 (n);
+
+        W1.ptr[0] = 0;
+        W2.ptr[0] = 0;
+        for (j=1; j<n; j++)
+            W1.ptr[j] = W2.ptr[j] = a[j] * M_SQRT1_2;
+
+        W11 = (0.5f * a[0]+1) * M_SQRT1_2;
+        W21 = (0.5f * a[0]-1) * M_SQRT1_2;
+
+        alpha1=1;
+        alpha2=1;
+
+        dee = d[0];
+        alphanew = alpha1 + (W11*W11)*dee;
+        dee /= alphanew;
+        gamma1 = W11 * dee;
+        dee *= alpha1;
+        alpha1 = alphanew;
+        alphanew = alpha2 - (W21*W21)*dee;
+        dee /= alphanew;
+        gamma2 = W21 * dee;
+        alpha2 = alphanew;
+        k1 = 1.0f - W21*gamma1;
+        k2 = W21*gamma1*W11 - W21;
+        for (p=1; p<n; p++) {
+            Wp = W1.ptr[p];
+            ell = L[p*nskip];
+            W1.ptr[p] =    Wp - W11*ell;
+            W2.ptr[p] = k1*Wp +  k2*ell;
+        }
+
+        for (j=1; j<n; j++) {
+            dee = d[j];
+            alphanew = alpha1 + (W1.ptr[j] * W1.ptr[j]) * dee;
+            dee /= alphanew;
+            gamma1 = W1.ptr[j] * dee;
+            dee *= alpha1;
+            alpha1 = alphanew;
+            alphanew = alpha2 - (W2.ptr[j] * W2.ptr[j])*dee;
+            dee /= alphanew;
+            gamma2 = W2.ptr[j] * dee;
+            dee *= alpha2;
+            d[j] = dee;
+            alpha2 = alphanew;
+
+            k1 = W1.ptr[j];
+            k2 = W2.ptr[j];
+            for (p=j+1; p<n; p++) {
+                ell = L[p*nskip+j];
+                Wp = W1.ptr[p] - k1 * ell;
+                ell += gamma1 * Wp;
+                W1.ptr[p] = Wp;
+                Wp = W2.ptr[p] - k2 * ell;
+                ell -= gamma2 * Wp;
+                W2.ptr[p] = Wp;
+                L[p*nskip+j] = ell;
+            }
+        }
+    }
+
+    #define _GETA(i,j) (A[i][j])
+    #define GETA(i,j) ((i > j) ? _GETA(i,j) : _GETA(j,i))
+
+    void dRemoveRowCol (float *A, int n, int nskip, int r) {
+        int i;
+        if (r >= n-1) return;
+        if (r > 0) {
+            for (i=0; i<r; i++)
+            memmove (A+i*nskip+r,A+i*nskip+r+1,(n-r-1)*sizeof(float));
+            for (i=r; i<(n-1); i++)
+            memcpy (A+i*nskip,A+i*nskip+nskip,r*sizeof(float));
+        }
+        for (i=r; i<(n-1); i++)
+            memcpy (A+i*nskip+r,A+i*nskip+nskip+r+1,(n-r-1)*sizeof(float));
+    }
+
+    void __fastcall dLDLTRemove (float **A, const int *p, float *L, float *d, int n1, int n2, int r, int nskip) {
+        int i;
+
+        if (r==n2-1) {
+            return;		// deleting last row/col is easy
+        }
+        else if (r==0) {
+            HeapArray<float> a (n2);
+            for (i=0; i<n2; i++) a.ptr[i] = -GETA(p[i],p[0]);
+            a.ptr[0] += 1.0f;
+            dLDLTAddTL (L,d,a.ptr,n2,nskip);
+        }
+        else {
+            HeapArray<float> t (r);
+            HeapArray<float> a (n2 - r);
+
+            for (i=0; i<r; i++)
+                t.ptr[i] = L[r*nskip+i] / d[i];
+
+            for (i=0; i<(n2-r); i++)
+                a.ptr[i] = dDot(L+(r+i)*nskip,t.ptr,r) - GETA(p[r+i],p[r]);
+            
+            a.ptr[0] += 1.0f;
+            dLDLTAddTL (L + r*nskip+r, d+r, a.ptr, n2-r, nskip);
+        }
+
+        // snip out row/column r from L and d
+        dRemoveRowCol(L,n2,nskip,r);
+        if (r < (n2-1)) memmove (d+r,d+r+1,(n2-r-1)*sizeof(float));
+    }
+
+    typedef void* (__thiscall* PFNdObStack_Rewind)(dObStack* self);
+    PFNdObStack_Rewind dObStack_Rewind = (PFNdObStack_Rewind) 0x008FC6F0;
+
+    typedef void* (__thiscall* PFNdObStack_Next)(dObStack* self, int num_bytes);
+    PFNdObStack_Next dObStack_Next = (PFNdObStack_Next) 0x008FC720;
+
+    typedef void* (__thiscall* PFNdObStack_FreeAll)(dObStack* self);
+    PFNdObStack_FreeAll dObStack_FreeAll = (PFNdObStack_FreeAll) 0x008FC6C0;
+
+    void removeJointReferencesFromAttachedBodies(dxJoint *j) {
+        for (int i=0; i<2; i++) {
+            dxBody *body = j->node[i].body;
+            if (body) {
+                dxJointNode *n = body->firstjoint;
+                dxJointNode *last = 0;
+                while (n) {
+                    if (n->joint == j) {
+                        if (last) last->next = n->next;
+                        else body->firstjoint = n->next;
+                        break;
+                    }
+                    last = n;
+                    n = n->next;
+                }
+            }
+        }
+        j->node[0].body = 0;
+        j->node[0].next = 0;
+        j->node[1].body = 0;
+        j->node[1].next = 0;
+    }
+
+    void removeObjectFromList (dObject *obj) {
+        if (obj->next) obj->next->tome = obj->tome;
+        *(obj->tome) = obj->next;
+        // safeguard
+        obj->next = 0;
+        obj->tome = 0;
+    }
+
+
+    void __fastcall dJointGroupEmpty (dJointGroupID group) {
+        // the joints in this group are detached starting from the most recently
+        // added (at the top of the stack). this helps ensure that the various
+        // linked lists are not traversed too much, as the joints will hopefully
+        // be at the start of those lists.
+        // if any group joints have their world pointer set to 0, their world was
+        // previously destroyed. no special handling is required for these joints.
+
+        int i;
+        HeapArray<dxJoint*> jlist (group->num);
+        dxJoint *j = (dxJoint*) dObStack_Rewind(&group->stack);
+        for (i=0; i < group->num; i++) {
+            jlist.ptr[i] = j;
+            j = (dxJoint*) dObStack_Next(&group->stack, j->vtable->size);
+        }
+        for (i=group->num-1; i >= 0; i--) {
+            if (jlist.ptr[i]->world) {
+            removeJointReferencesFromAttachedBodies(jlist.ptr[i]);
+            removeObjectFromList (jlist.ptr[i]);
+            jlist.ptr[i]->world->nj--;
+            }
+        }
+        group->num = 0;
+        dObStack_FreeAll(&group->stack);
+    };
+
     void Apply() {
         routines::Redirect(0x2350, (void*) 0x008FF580, (void*) &dInternalStepIsland_x2);
         routines::Redirect(0x07B0, (void*) 0x00921A10, (void*) &dSolveL1);
         routines::Redirect(0x05B0, (void*) 0x00921460, (void*) &dSolveL1T);
         routines::Redirect(0x00D0, (void*) 0x009169E0, (void*) &dDot);
-        routines::Redirect(0x0060, (void*) 0x0088B380, (void*) &dIsPositiveDefinite);
         routines::Redirect(0x0150, (void*) 0x0088B030, (void*) &dFactorCholesky);
         routines::Redirect(0x0330, (void*) 0x0088A400, (void*) &dSolveCholesky);
         routines::Redirect(0x0200, (void*) 0x0088B180, (void*) &dInvertPDMatrix);
+        routines::Redirect(0x0060, (void*) 0x0088B380, (void*) &dIsPositiveDefinite);
+        routines::Redirect(0x06E0, (void*) 0x0088A820, (void*) &dLDLTAddTL);
+        routines::Redirect(0x03F0, (void*) 0x0088B3E0, (void*) &dLDLTRemove);
+        routines::Redirect(0x00C0, (void*) 0x007C4FD0, (void*) &dJointGroupEmpty);
     };
 };
