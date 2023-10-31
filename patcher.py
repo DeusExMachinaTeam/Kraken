@@ -27,7 +27,17 @@ PATCHES: list[Patch] = [
         "dllLibrary",
         0x005FED63,
         b"kraken.dll\x00\x00"
-    )
+    ),
+    Patch(
+        "4GB LAA",
+        0x15E,
+        b"\x2E"
+    ),
+    Patch(
+        "4MB Stack Reserve",
+        0x1A8,
+        b"\x00\x00\x40\x00"
+    ),
 ]
 
 EXE = pathlib.Path(r"C:\Program Files (x86)\Steam\steamapps\common\Hard Truck Apocalypse\hta.exe")

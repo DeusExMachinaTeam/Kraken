@@ -1,5 +1,5 @@
 1 VERSIONINFO
- FILEVERSION 0,1,0,0
+ FILEVERSION 0,1,1,0
  PRODUCTVERSION 0,1,0,0
  FILEFLAGSMASK 0x3FL
 #ifdef _DEBUG
@@ -19,7 +19,7 @@ BEGIN
             VALUE "LegalCopyright",     "DeusExMachina Team (c) 2023\0"
             VALUE "OriginalFilename",   "kraken.dll\0"
             VALUE "ProductName",        "Kraken\0"
-            VALUE "ProductVersion",     "0.1.0.0\0"
+            VALUE "ProductVersion",     "0.1.1.0\0"
         END
     END
     BLOCK "VarFileInfo"

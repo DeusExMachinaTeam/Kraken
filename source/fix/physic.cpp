@@ -1,6 +1,7 @@
 #include "float.h"
 
 #include <smmintrin.h>
+#include <immintrin.h>
 
 #include "routines.hpp"
 #include "fix/physic.hpp"
@@ -270,6 +271,8 @@ namespace kraken::fix::physic {
                 this->size = ((this->size >> 4) << 4) + 0x10;
 
             this->ptr = (T *)malloc(this->size);
+            if (!this->ptr)
+                DebugBreak();
 
             this->checksum = RIGHT_SHIFT(DWORD, this->ptr, this->size - sizeof(DWORD));
             *this->checksum = 0xDEADBEEF;
@@ -458,7 +461,15 @@ namespace kraken::fix::physic {
         dxBodyAutoDisable = 16        // enable auto-disable on body
     };
 
+    float last = 0;
+    float step = 1 / 120;
+
     void __fastcall dInternalStepIsland_x2(dxWorld* world, dxBody*const* body, int nb, dxJoint*const* _joint, int nj, float stepsize) {
+        last += stepsize;
+        if (last < step) return;
+        stepsize = last;
+        last = 0;
+
         int i, j, k;
         float stepsize1 = 1.0 / stepsize;
 
@@ -1356,10 +1367,13 @@ namespace kraken::fix::physic {
 
         float sum = 0;
         for (size_t i = 0; i < base; i+=4) {
-            __m128 x = _mm_load_ps(a + i);
-            __m128 y = _mm_load_ps(b + i);
-            __m128 s = _mm_dp_ps(x, y, 0x3F);
-            sum += _mm_cvtss_f32(s);
+            __m256d x = _mm256_set_pd(a[i], a[i+1], a[i+2], a[i+3]);
+            __m256d y = _mm256_set_pd(b[i], b[i+1], b[i+2], b[i+3]);
+            __m256d s = _mm256_mul_pd(x, y);
+            __m128d l = _mm256_extractf128_pd(s, 0);
+            __m128d h = _mm256_extractf128_pd(s, 1);
+            __m128d d = _mm_add_pd(l, h);
+            sum += _mm_cvtsd_f64(d);
         };
 
         for (; base < n; base++) {
@@ -1643,6 +1657,7 @@ namespace kraken::fix::physic {
     };
 
     struct dLCP {
+        DWORD*  checksum;
         int     n;
         int     nskip;
         int     nub;
@@ -1665,29 +1680,31 @@ namespace kraken::fix::physic {
         int     nC;
         int     nN;
 
+        void Check();
+
         dLCP (int _n, int _nub, float* _Adata, float* _x, float* _b, float* _w,
               float* _lo, float* _hi, float* _L, float* _d,
               float* _Dell, float* _ell, float* _tmp,
-              int* _state, int* _findex, int* _p, int* _C, float** Arows);
+              int* _state, int* _findex, int* _p, int* _C, float** Arows, DWORD* checksum);
 
-        int getNub() { return nub; }
-        void transfer_i_to_C (int i);
-        void transfer_i_to_N (int i) { nN++; }			// because we can assume C and N span 1:i-1
-        void transfer_i_from_N_to_C (int i);
-        void transfer_i_from_C_to_N (int i);
-        int numC() { return nC; }
-        int numN() { return nN; }
-        int indexC (int i) { return i; }
-        int indexN (int i) { return i+nC; }
-        float Aii (int i) { return this->A[i][i]; }
-        float AiC_times_qC (int i, float *q) { return dDot (this->A[i],q,nC); }
-        float AiN_times_qN (int i, float *q) { return dDot (this->A[i]+nC,q+nC,nN); }
-        void pN_equals_ANC_times_qC (float *p, float *q);
-        void pN_plusequals_ANi (float *p, int i, int sign=1);
-        void pC_plusequals_s_times_qC (float *p, float s, float *q) { for (int i=0; i<nC; i++) p[i] += s*q[i]; }
-        void pN_plusequals_s_times_qN (float *p, float s, float *q) { for (int i=0; i<nN; i++) p[i+nC] += s*q[i+nC]; }
-        void solve1 (float *a, int i, int dir=1, int only_transfer=0);
-        void unpermute();
+        inline int getNub() { return nub; }
+        inline void transfer_i_to_C (int i);
+        inline void transfer_i_to_N (int i) { nN++; }			// because we can assume C and N span 1:i-1
+        inline void transfer_i_from_N_to_C (int i);
+        inline void transfer_i_from_C_to_N (int i);
+        inline int numC() { return nC; }
+        inline int numN() { return nN; }
+        inline int indexC (int i) { return i; }
+        inline int indexN (int i) { return i+nC; }
+        inline float Aii (int i) { return this->A[i][i]; }
+        inline float AiC_times_qC (int i, float *q) { return dDot (this->A[i],q,nC); }
+        inline float AiN_times_qN (int i, float *q) { return dDot (this->A[i]+nC,q+nC,nN); }
+        inline void pN_equals_ANC_times_qC (float *p, float *q);
+        inline void pN_plusequals_ANi (float *p, int i, int sign=1);
+        inline void pC_plusequals_s_times_qC (float *p, float s, float *q) { for (int i=0; i<nC; i++) p[i] += s*q[i]; }
+        inline void pN_plusequals_s_times_qN (float *p, float s, float *q) { for (int i=0; i<nN; i++) p[i+nC] += s*q[i+nC]; }
+        inline void solve1 (float *a, int i, int dir=1, int only_transfer=0);
+        inline void unpermute();
     };
 
     void dSetZero (float *a, int n) {
@@ -1785,14 +1802,14 @@ namespace kraken::fix::physic {
             for (j=0; j<nC; j++) Dell[j] = aptr[C[j]];
         #   endif
             dSolveL1 (L,Dell,nC,nskip);
-            //L.Check();
+            this->Check();
 
             for (j=0; j<nC; j++) ell[j] = Dell[j] * d[j];
 
             if (!only_transfer) {
             for (j=0; j<nC; j++) tmp[j] = ell[j];
             dSolveL1T (L,tmp,nC,nskip);
-            //L.Check();
+            this->Check();
 
             if (dir > 0) {
             for (j=0; j<nC; j++) a[C[j]] = -tmp[j];
@@ -1842,7 +1859,7 @@ namespace kraken::fix::physic {
         int j,k;
         for (j=0; j<nC; j++) if (C[j]==i) {
             dLDLTRemove (A,C,L,d,n,nC,j,nskip);
-            //L.Check();
+            this->Check();
             for (k=0; k<nC; k++) if (C[k]==nC-1) {
                 C[k] = C[j];
                 if (j < (nC-1)) memmove (C+j,C+j+1,(nC-j-1)*sizeof(int));
@@ -1863,10 +1880,10 @@ namespace kraken::fix::physic {
             for (j=0; j<nub; j++) Dell[j] = aptr[j];
             for (j=nub; j<nC; j++) Dell[j] = aptr[C[j]];
             dSolveL1 (L,Dell,nC,nskip);
-            //L.Check();
+            this->Check();
             for (j=0; j<nC; j++) ell[j] = Dell[j] * d[j];
             for (j=0; j<nC; j++) L[nC*nskip+j] = ell[j];
-            //L.Check();
+            this->Check();
             d[nC] = 1.0f / (A[i][i] - dDot(ell,Dell,nC));
         }
         else {
@@ -1889,7 +1906,7 @@ namespace kraken::fix::physic {
         if (nC > 0) {
             // ell,Dell were computed by solve1(). note, ell = D \ L1solve (L,A(i,C))
             for (j=0; j<nC; j++) L[nC*nskip+j] = ell[j];
-            //L.Check();
+            this->Check();
             d[nC] = 1.0f / (A[i][i] - dDot(ell,Dell,nC));
         }
         else {
@@ -1900,6 +1917,7 @@ namespace kraken::fix::physic {
         nC++;
     }
     
+
     void dSolveL1_1 (const float *L, float *B, int n, int lskip1) {
         /* declare variables - Z matrix, p and q vectors, etc */
         float Z11,m11,Z21,m21,p1,q1,p2,*ex;
@@ -1960,6 +1978,18 @@ namespace kraken::fix::physic {
             /* end of outer loop */
         }
     }
+
+    void _dSolveL1_2 (float *L, float *B, int n, int lskip1) {  
+        for (size_t j = 0; j < n * lskip1; j+= lskip1) {
+            float* p = B;
+            float* q = B + n;
+            float* l = L + j;
+            for (size_t i = 0; i < n; i++) {
+                p[i] += l[i]/ l[j] * p[i];
+                q[i] += l[i]/ l[j] * q[i];
+            }
+        };
+    };
 
     void dSolveL1_2 (const float *L, float *B, int n, int lskip1) {  
         /* declare variables - Z matrix, p and q vectors, etc */
@@ -2265,10 +2295,16 @@ namespace kraken::fix::physic {
         dSolveL1T (L,b,n,nskip);
     }
 
+    void dLCP::Check() {
+        if (*checksum != 0xDEADBEEF)
+            DebugBreak;
+    };
+
     dLCP::dLCP (int _n, int _nub, float *_Adata, float *_x, float *_b, float *_w,
                 float *_lo, float *_hi, float* _L, float *_d,
                 float *_Dell, float *_ell, float *_tmp,
-                int *_state, int *_findex, int *_p, int *_C, float **Arows){
+                int *_state, int *_findex, int *_p, int *_C, float **Arows, DWORD* checksum){
+        checksum = checksum;
         n = _n;
         nub = _nub;
         Adata = _Adata;
@@ -2336,13 +2372,13 @@ namespace kraken::fix::physic {
         // point and solve for x. this puts all indexes 0..nub-1 into C.
         if (nub > 0) {
             for (k=0; k<nub; k++) memcpy (L+k*nskip,A[k],(k+1)*sizeof(float));
-            //L.Check();
+            this->Check();
             dFactorLDLT (L,d,nub,nskip);
-            //L.Check();
+            this->Check();
 
             memcpy (x,b,nub*sizeof(float));
             dSolveLDLT ((const float*) L,d,x,nub,nskip);
-            //L.Check();
+            this->Check();
             dSetZero (w,nub);
             for (k=0; k<nub; k++) C[k] = k;
             nC = nub;
@@ -2402,7 +2438,7 @@ namespace kraken::fix::physic {
 
         // create LCP object. note that tmp is set to delta_w to save space, this
         // optimization relies on knowledge of how tmp is used, so be careful!
-        dLCP lcp (n, nub, A, x, b, w, lo, hi, L.ptr, d.ptr, Dell.ptr, ell.ptr, delta_w.ptr, state.ptr, findex, p.ptr, C.ptr, Arows.ptr);
+        dLCP lcp (n, nub, A, x, b, w, lo, hi, L.ptr, d.ptr, Dell.ptr, ell.ptr, delta_w.ptr, state.ptr, findex, p.ptr, C.ptr, Arows.ptr, L.checksum);
         nub = lcp.getNub();
 
         // loop over all indexes nub..n-1. for index i, if x(i),w(i) satisfy the
