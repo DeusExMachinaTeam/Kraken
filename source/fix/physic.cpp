@@ -1657,7 +1657,6 @@ namespace kraken::fix::physic {
     };
 
     struct dLCP {
-        DWORD*  checksum;
         int     n;
         int     nskip;
         int     nub;
@@ -1680,12 +1679,10 @@ namespace kraken::fix::physic {
         int     nC;
         int     nN;
 
-        void Check();
-
         dLCP (int _n, int _nub, float* _Adata, float* _x, float* _b, float* _w,
               float* _lo, float* _hi, float* _L, float* _d,
               float* _Dell, float* _ell, float* _tmp,
-              int* _state, int* _findex, int* _p, int* _C, float** Arows, DWORD* checksum);
+              int* _state, int* _findex, int* _p, int* _C, float** Arows);
 
         inline int getNub() { return nub; }
         inline void transfer_i_to_C (int i);
@@ -1802,14 +1799,12 @@ namespace kraken::fix::physic {
             for (j=0; j<nC; j++) Dell[j] = aptr[C[j]];
         #   endif
             dSolveL1 (L,Dell,nC,nskip);
-            this->Check();
 
             for (j=0; j<nC; j++) ell[j] = Dell[j] * d[j];
 
             if (!only_transfer) {
             for (j=0; j<nC; j++) tmp[j] = ell[j];
             dSolveL1T (L,tmp,nC,nskip);
-            this->Check();
 
             if (dir > 0) {
             for (j=0; j<nC; j++) a[C[j]] = -tmp[j];
@@ -1859,7 +1854,6 @@ namespace kraken::fix::physic {
         int j,k;
         for (j=0; j<nC; j++) if (C[j]==i) {
             dLDLTRemove (A,C,L,d,n,nC,j,nskip);
-            this->Check();
             for (k=0; k<nC; k++) if (C[k]==nC-1) {
                 C[k] = C[j];
                 if (j < (nC-1)) memmove (C+j,C+j+1,(nC-j-1)*sizeof(int));
@@ -1880,10 +1874,8 @@ namespace kraken::fix::physic {
             for (j=0; j<nub; j++) Dell[j] = aptr[j];
             for (j=nub; j<nC; j++) Dell[j] = aptr[C[j]];
             dSolveL1 (L,Dell,nC,nskip);
-            this->Check();
             for (j=0; j<nC; j++) ell[j] = Dell[j] * d[j];
             for (j=0; j<nC; j++) L[nC*nskip+j] = ell[j];
-            this->Check();
             d[nC] = 1.0f / (A[i][i] - dDot(ell,Dell,nC));
         }
         else {
@@ -1906,7 +1898,6 @@ namespace kraken::fix::physic {
         if (nC > 0) {
             // ell,Dell were computed by solve1(). note, ell = D \ L1solve (L,A(i,C))
             for (j=0; j<nC; j++) L[nC*nskip+j] = ell[j];
-            this->Check();
             d[nC] = 1.0f / (A[i][i] - dDot(ell,Dell,nC));
         }
         else {
@@ -2295,16 +2286,10 @@ namespace kraken::fix::physic {
         dSolveL1T (L,b,n,nskip);
     }
 
-    void dLCP::Check() {
-        if (*checksum != 0xDEADBEEF)
-            DebugBreak;
-    };
-
     dLCP::dLCP (int _n, int _nub, float *_Adata, float *_x, float *_b, float *_w,
                 float *_lo, float *_hi, float* _L, float *_d,
                 float *_Dell, float *_ell, float *_tmp,
-                int *_state, int *_findex, int *_p, int *_C, float **Arows, DWORD* checksum){
-        checksum = checksum;
+                int *_state, int *_findex, int *_p, int *_C, float **Arows){
         n = _n;
         nub = _nub;
         Adata = _Adata;
@@ -2372,13 +2357,10 @@ namespace kraken::fix::physic {
         // point and solve for x. this puts all indexes 0..nub-1 into C.
         if (nub > 0) {
             for (k=0; k<nub; k++) memcpy (L+k*nskip,A[k],(k+1)*sizeof(float));
-            this->Check();
             dFactorLDLT (L,d,nub,nskip);
-            this->Check();
 
             memcpy (x,b,nub*sizeof(float));
             dSolveLDLT ((const float*) L,d,x,nub,nskip);
-            this->Check();
             dSetZero (w,nub);
             for (k=0; k<nub; k++) C[k] = k;
             nC = nub;
@@ -2438,7 +2420,7 @@ namespace kraken::fix::physic {
 
         // create LCP object. note that tmp is set to delta_w to save space, this
         // optimization relies on knowledge of how tmp is used, so be careful!
-        dLCP lcp (n, nub, A, x, b, w, lo, hi, L.ptr, d.ptr, Dell.ptr, ell.ptr, delta_w.ptr, state.ptr, findex, p.ptr, C.ptr, Arows.ptr, L.checksum);
+        dLCP lcp (n, nub, A, x, b, w, lo, hi, L.ptr, d.ptr, Dell.ptr, ell.ptr, delta_w.ptr, state.ptr, findex, p.ptr, C.ptr, Arows.ptr);
         nub = lcp.getNub();
 
         // loop over all indexes nub..n-1. for index i, if x(i),w(i) satisfy the
