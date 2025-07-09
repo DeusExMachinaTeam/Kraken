@@ -9,6 +9,11 @@ namespace kraken::routines {
         char   op;
         size_t to;
     };
+    union _Call {
+        struct { uint8_t  cmd; uintptr_t offset;   } direct;
+        struct { uint16_t cmd; uintptr_t location; } indirect;
+        struct { uint8_t marker[2];                };
+    };
     #pragma pack(pop)
 
     inline void Redirect(size_t size, void* src, void* tar) {
@@ -43,20 +48,22 @@ namespace kraken::routines {
         VirtualProtect(src, sizeof(size_t), protection, &protection);
     };
 
-    inline void make_call(void* addr, void* target)
-    {
+    inline void MakeCall(void* src, void* tar) {
         DWORD protection;
-        constexpr size_t instr_size = 5;
 
-        intptr_t rel = reinterpret_cast<intptr_t>(target) - reinterpret_cast<intptr_t>(addr) - instr_size;
 
-        uint8_t buffer[instr_size];
-        buffer[0] = 0xE8;
-        *reinterpret_cast<int32_t*>(&buffer[1]) = static_cast<int32_t>(rel);
-
-        VirtualProtect(addr, instr_size, PAGE_EXECUTE_READWRITE, &protection);
-        memcpy(addr, buffer, instr_size);
-        VirtualProtect(addr, instr_size, protection, &protection);
+        VirtualProtect(src, sizeof(_Call), PAGE_EXECUTE_READWRITE, &protection);
+        _Call* opcode = (_Call*)src;
+        if (opcode->marker[0] == 0xE8) {
+            opcode->direct.offset = reinterpret_cast<intptr_t>(tar) - reinterpret_cast<intptr_t>(src) - 5;
+        }
+        else if (opcode->marker[0] == 0xFF && opcode->marker[1] == 0x15) {
+            opcode->indirect.location = reinterpret_cast<intptr_t>(tar);
+        }
+        else {
+            throw std::runtime_error("Invalid operator!");
+        }
+        VirtualProtect(src, sizeof(_Call), protection, &protection);
     };
 };
 
