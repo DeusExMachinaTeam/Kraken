@@ -3,6 +3,7 @@
 #include "routines.hpp"
 
 #include "fix/physic.hpp"
+#include "fix/autobrakefix.hpp"
 #include "hta/pointers.hpp"
 
 namespace kraken {
@@ -31,5 +32,6 @@ namespace kraken {
         G_MODULE = module;
         ConstantHotfix();
         fix::physic::Apply();
+        fix::autobrakefix::Apply();
     };
 };

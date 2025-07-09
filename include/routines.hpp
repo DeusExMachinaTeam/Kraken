@@ -42,6 +42,22 @@ namespace kraken::routines {
         memcpy(src, &temp, sizeof(size_t));
         VirtualProtect(src, sizeof(size_t), protection, &protection);
     };
+
+    inline void make_call(void* addr, void* target)
+    {
+        DWORD protection;
+        constexpr size_t instr_size = 5;
+
+        intptr_t rel = reinterpret_cast<intptr_t>(target) - reinterpret_cast<intptr_t>(addr) - instr_size;
+
+        uint8_t buffer[instr_size];
+        buffer[0] = 0xE8;
+        *reinterpret_cast<int32_t*>(&buffer[1]) = static_cast<int32_t>(rel);
+
+        VirtualProtect(addr, instr_size, PAGE_EXECUTE_READWRITE, &protection);
+        memcpy(addr, buffer, instr_size);
+        VirtualProtect(addr, instr_size, protection, &protection);
+    };
 };
 
 #endif
