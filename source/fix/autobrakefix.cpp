@@ -7,8 +7,20 @@ namespace kraken::fix::autobrakefix {
     {
         if (vehicle->m_pPath) {
             if (vehicle->m_pathNum < vehicle->m_pPath->m_size - 1) {
-                vehicle->SetThrottle(throttle, false);
-                return;
+                CVector velocity;
+                vehicle->GetLinearVelocity(&velocity);
+
+                float speedSquared = velocity * velocity;
+
+                if (speedSquared > 1e-10f) {
+                    CVector forward;
+                    vehicle->GetDirection(&forward);
+                    float dot = forward * velocity;
+                    if (dot > 0.0f) {
+                        vehicle->SetThrottle(throttle, false);
+                        return;
+                    }
+                }
             }
         }
         vehicle->SetThrottle(throttle, autobrake);
