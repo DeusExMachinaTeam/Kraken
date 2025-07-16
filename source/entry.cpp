@@ -4,6 +4,7 @@
 
 #include "fix/physic.hpp"
 #include "fix/autobrakefix.hpp"
+#include "fix/objcontupgrade.hpp"
 #include "hta/pointers.hpp"
 
 namespace kraken {
@@ -33,5 +34,6 @@ namespace kraken {
         ConstantHotfix();
         fix::physic::Apply();
         fix::autobrakefix::Apply();
+        fix::objcontupgrade::Apply();
     };
 };
