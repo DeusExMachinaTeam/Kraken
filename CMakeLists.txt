@@ -16,6 +16,7 @@ set(SOURCES
     source/config.cpp
     source/fix/physic.cpp
     source/fix/autobrakefix.cpp
+    source/fix/objcontupgrade.cpp
 )
 
 # Header files
@@ -27,6 +28,7 @@ set(HEADERS
     include/utils.hpp
     include/fix/physic.hpp
     include/fix/autobrakefix.hpp
+    include/fix/objcontupgrade.hpp
     include/hta/pointers.hpp
     include/hta/CStr.h
     include/hta/CVector.h
