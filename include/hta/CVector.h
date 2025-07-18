@@ -16,7 +16,7 @@ struct CVector
 	{
 		return { x - rhs.x, y - rhs.y, z - rhs.z };
 	}
-	double operator*(const CVector& rhs)
+	double dot(const CVector& rhs)
 	{
 		return x * rhs.x + y * rhs.y + z * rhs.z;
 	}

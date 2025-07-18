@@ -10,12 +10,12 @@ namespace kraken::fix::autobrakefix {
                 CVector velocity;
                 vehicle->GetLinearVelocity(&velocity);
 
-                float speedSquared = velocity * velocity;
+                float speedSquared = velocity.dot(velocity);
 
                 if (speedSquared > 1e-10f) {
                     CVector forward;
                     vehicle->GetDirection(&forward);
-                    float dot = forward * velocity;
+                    float dot = forward.dot(velocity);
                     if (dot > 0.0f) {
                         vehicle->SetThrottle(throttle, false);
                         return;
