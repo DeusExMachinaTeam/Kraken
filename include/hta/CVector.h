@@ -12,4 +12,12 @@ struct CVector
 	float x;
 	float y;
 	float z;
+	CVector operator-(const CVector& rhs)
+	{
+		return { x - rhs.x, y - rhs.y, z - rhs.z };
+	}
+	double dot(const CVector& rhs)
+	{
+		return x * rhs.x + y * rhs.y + z * rhs.z;
+	}
 };
